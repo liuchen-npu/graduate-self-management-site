@@ -751,6 +751,23 @@
                     <button id="import-data-btn" type="button" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm">读取数据</button>
                     <input id="import-data-input" type="file" accept="application/json" class="hidden">
                 </div>
+                <div class="bg-gray-50 rounded-lg p-4">
+                    <div class="text-sm font-medium text-gray-700 mb-2">自动备份与自动读取</div>
+                    <div class="flex items-center gap-2 text-xs text-gray-600">
+                        <input id="auto-backup-enabled" type="checkbox" class="h-4 w-4">
+                        <label for="auto-backup-enabled">开启自动备份到指定文件</label>
+                    </div>
+                    <div class="flex items-center gap-2 text-xs text-gray-600 mt-2">
+                        <input id="auto-restore-enabled" type="checkbox" class="h-4 w-4">
+                        <label for="auto-restore-enabled">启动时自动读取该文件</label>
+                    </div>
+                    <div class="flex flex-wrap gap-2 mt-3">
+                        <button id="auto-backup-file-btn" type="button" class="px-3 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs">选择自动备份文件</button>
+                        <button id="auto-backup-clear-btn" type="button" class="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs">取消自动备份</button>
+                    </div>
+                    <div class="text-xs text-gray-400 mt-2" id="auto-backup-status">未设置</div>
+                    <div class="text-xs text-gray-400 mt-1">首次设置会请求浏览器文件权限，未授权时将无法自动写入。</div>
+                </div>
             </div>
             <div class="flex justify-end mt-6">
                 <button id="storage-close" type="button" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg">关闭</button>
@@ -832,6 +849,11 @@
         let selectedExerciseType = '';
         let sessionEditState = null;
         let lastExportFileName = '';
+        let autoBackupEnabled = false;
+        let autoRestoreEnabled = true;
+        let autoBackupHandleName = '';
+        let lastAutoBackupDate = '';
+        let autoBackupTimer = null;
 
         // 咖啡品牌和品类数据结构
         // 格式: { brandName: { typeName: caffeineValue } }
@@ -896,6 +918,8 @@
             initStatistics();
             initMood();
             updateTodayStatus();
+            attemptAutoRestore();
+            scheduleAutoBackup();
         });
 
         // 初始化数据
@@ -908,6 +932,10 @@
             const savedBallTypeOptions = localStorage.getItem('ballTypeOptions');
             const savedCustomExerciseTypes = localStorage.getItem('customExerciseTypes');
             const savedLastExportFileName = localStorage.getItem('lastExportFileName');
+            const savedAutoBackupEnabled = localStorage.getItem('autoBackupEnabled');
+            const savedAutoRestoreEnabled = localStorage.getItem('autoRestoreEnabled');
+            const savedAutoBackupHandleName = localStorage.getItem('autoBackupHandleName');
+            const savedLastAutoBackupDate = localStorage.getItem('lastAutoBackupDate');
             const savedTaskData = localStorage.getItem('taskData');
             const savedCoffeeData = localStorage.getItem('coffeeData');
             const savedActiveWorkState = localStorage.getItem('activeWorkState');
@@ -922,6 +950,10 @@
             taskData = savedTaskData ? JSON.parse(savedTaskData) : {};
             coffeeData = savedCoffeeData ? JSON.parse(savedCoffeeData) : getDefaultCoffeeData();
             lastExportFileName = savedLastExportFileName || '';
+            autoBackupEnabled = savedAutoBackupEnabled === null ? false : savedAutoBackupEnabled === 'true';
+            autoRestoreEnabled = savedAutoRestoreEnabled === null ? true : savedAutoRestoreEnabled === 'true';
+            autoBackupHandleName = savedAutoBackupHandleName || '';
+            lastAutoBackupDate = savedLastAutoBackupDate || '';
 
             // 确保结构完整
             if (!intakeData.coffee) intakeData.coffee = { total: 0, totalCaffeine: 0, records: {} };
@@ -1005,6 +1037,10 @@
                 localStorage.setItem('taskData', JSON.stringify(taskData));
                 localStorage.setItem('coffeeData', JSON.stringify(coffeeData));
                 localStorage.setItem('activeWorkState', JSON.stringify(activeWorkState));
+                localStorage.setItem('autoBackupEnabled', String(autoBackupEnabled));
+                localStorage.setItem('autoRestoreEnabled', String(autoRestoreEnabled));
+                localStorage.setItem('autoBackupHandleName', autoBackupHandleName || '');
+                localStorage.setItem('lastAutoBackupDate', lastAutoBackupDate || '');
                 return true;
             } catch (error) {
                 console.error('saveData failed:', error);
@@ -1067,6 +1103,7 @@
             renderProfile();
             applyThemeBackground();
             updateDataStorageStatus();
+            initAutoBackupControls();
         }
 
         function renderProfile() {
@@ -1250,6 +1287,262 @@
             document.getElementById('data-storage-path').textContent = lastExportFileName
                 ? `当前最近导出/读取文件：${lastExportFileName}`
                 : '点击“更改保存位置”后可选择本地保存文件，点击“读取数据”可载入备份';
+            updateAutoBackupStatus();
+        }
+
+
+        function updateAutoBackupStatus() {
+            const statusEl = document.getElementById("auto-backup-status");
+            if (!statusEl) return;
+            const enabledText = autoBackupEnabled ? "已开启" : "未开启";
+            const fileText = autoBackupHandleName ? `文件：${autoBackupHandleName}` : "未选择文件";
+            statusEl.textContent = `${enabledText} · ${fileText}`;
+            const autoBackupCheckbox = document.getElementById("auto-backup-enabled");
+            const autoRestoreCheckbox = document.getElementById("auto-restore-enabled");
+            if (autoBackupCheckbox) autoBackupCheckbox.checked = !!autoBackupEnabled;
+            if (autoRestoreCheckbox) autoRestoreCheckbox.checked = !!autoRestoreEnabled;
+        }
+
+        function openAutoBackupDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open("gsm_auto_backup", 1);
+                request.onupgradeneeded = function() {
+                    request.result.createObjectStore("handles");
+                };
+                request.onsuccess = function() {
+                    resolve(request.result);
+                };
+                request.onerror = function() {
+                    reject(request.error);
+                };
+            });
+        }
+
+        async function saveAutoBackupHandle(handle) {
+            const db = await openAutoBackupDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction("handles", "readwrite");
+                tx.objectStore("handles").put(handle, "autoBackup");
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        async function loadAutoBackupHandle() {
+            const db = await openAutoBackupDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction("handles", "readonly");
+                const req = tx.objectStore("handles").get("autoBackup");
+                req.onsuccess = () => resolve(req.result || null);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function clearAutoBackupHandle() {
+            const db = await openAutoBackupDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction("handles", "readwrite");
+                tx.objectStore("handles").delete("autoBackup");
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        async function ensureHandlePermission(handle, mode) {
+            if (!handle || !handle.queryPermission) return false;
+            const options = { mode };
+            let permission = await handle.queryPermission(options);
+            if (permission === "granted") return true;
+            permission = await handle.requestPermission(options);
+            return permission === "granted";
+        }
+
+        async function selectAutoBackupFile() {
+            if (!window.showSaveFilePicker) {
+                showToast("当前浏览器不支持自动写入文件");
+                return;
+            }
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: `research-dashboard-backup-${getTodayString()}.json`,
+                    types: [{ description: "JSON 文件", accept: { "application/json": [".json"] } }]
+                });
+                await saveAutoBackupHandle(handle);
+                autoBackupHandleName = handle.name || `research-dashboard-backup-${getTodayString()}.json`;
+                autoBackupEnabled = true;
+                saveData();
+                updateAutoBackupStatus();
+                showToast("已设置自动备份文件");
+            } catch (error) {
+                if (error && error.name === "AbortError") return;
+                showToast("设置自动备份失败");
+            }
+        }
+
+        async function clearAutoBackupFile() {
+            try {
+                await clearAutoBackupHandle();
+            } catch (error) {
+                console.error("clearAutoBackupHandle failed:", error);
+            }
+            autoBackupHandleName = "";
+            autoBackupEnabled = false;
+            saveData();
+            updateAutoBackupStatus();
+            showToast("已取消自动备份");
+        }
+
+        function initAutoBackupControls() {
+            const backupCheckbox = document.getElementById("auto-backup-enabled");
+            const restoreCheckbox = document.getElementById("auto-restore-enabled");
+            const pickButton = document.getElementById("auto-backup-file-btn");
+            const clearButton = document.getElementById("auto-backup-clear-btn");
+            if (!backupCheckbox || !restoreCheckbox || !pickButton || !clearButton) return;
+            backupCheckbox.checked = !!autoBackupEnabled;
+            restoreCheckbox.checked = !!autoRestoreEnabled;
+            backupCheckbox.addEventListener("change", () => {
+                autoBackupEnabled = backupCheckbox.checked;
+                saveData();
+                updateAutoBackupStatus();
+            });
+            restoreCheckbox.addEventListener("change", () => {
+                autoRestoreEnabled = restoreCheckbox.checked;
+                saveData();
+                updateAutoBackupStatus();
+            });
+            pickButton.addEventListener("click", selectAutoBackupFile);
+            clearButton.addEventListener("click", clearAutoBackupFile);
+            updateAutoBackupStatus();
+        }
+
+        function applyImportedData(parsed, sourceName, options = {}) {
+            const silent = !!options.silent;
+            const closeStorage = options.closeStorage !== false;
+
+            workData = parsed.workData || { records: {} };
+            intakeData = parsed.intakeData || { coffee: { total: 0, totalCaffeine: 0, records: {} }, water: { total: 0, records: {} } };
+            toiletData = parsed.toiletData || { records: {} };
+            exerciseData = parsed.exerciseData || { records: {} };
+            profileData = parsed.profileData || { name: "姓名", id: "123", avatar: "", backgroundImage: "" };
+            ballTypeOptions = parsed.ballTypeOptions || ["篮球", "足球", "羽毛球", "网球", "乒乓球", "排球"];
+            customExerciseTypes = parsed.customExerciseTypes || [];
+            taskData = parsed.taskData || {};
+            coffeeData = parsed.coffeeData || getDefaultCoffeeData();
+            const importedActiveWorkState = parsed.activeWorkState || getDefaultActiveWorkState();
+            workState = ["idle", "working", "resting"].includes(importedActiveWorkState.workState) ? importedActiveWorkState.workState : "idle";
+            currentWorkSession = normalizeSession(importedActiveWorkState.currentWorkSession);
+            currentRestSession = normalizeSession(importedActiveWorkState.currentRestSession);
+            if (workState === "working" && !currentWorkSession) workState = "idle";
+            if (workState === "resting" && !currentRestSession) workState = "idle";
+            if (workState === "idle") {
+                currentWorkSession = null;
+                currentRestSession = null;
+            }
+            localStorage.setItem("todoData", JSON.stringify(parsed.todoData || {}));
+            localStorage.setItem("moodData", JSON.stringify(parsed.moodData || {}));
+            if (sourceName) {
+                lastExportFileName = sourceName;
+            }
+            saveData();
+            initData();
+            renderProfile();
+            applyThemeBackground();
+            updateBallTypeOptions();
+            renderExerciseTypeButtons();
+            updateWorkDisplay();
+            updateTodayWorkSessions();
+            updateTodayRestSessions();
+            updateTodayWorkStats();
+            updateIntakeDisplay();
+            updateToiletDisplay();
+            updateExerciseDisplay();
+            renderTodoList();
+            renderMoodTimeline();
+            updateTodayStatus();
+            updateDataStorageStatus();
+            document.getElementById("nav-tasks").click();
+            if (closeStorage) {
+                closeStorageModal();
+            }
+            if (!silent) {
+                showToast("数据已读取");
+            }
+        }
+
+        async function autoBackupToHandle(reason) {
+            if (!autoBackupEnabled) return false;
+            let handle = null;
+            try {
+                handle = await loadAutoBackupHandle();
+            } catch (error) {
+                console.error("loadAutoBackupHandle failed:", error);
+            }
+            if (!handle) return false;
+            const hasPermission = await ensureHandlePermission(handle, "readwrite");
+            if (!hasPermission) return false;
+
+            const payload = JSON.stringify(buildAppSnapshot(), null, 2);
+            try {
+                const writable = await handle.createWritable();
+                await writable.write(payload);
+                await writable.close();
+                autoBackupHandleName = handle.name || autoBackupHandleName;
+                lastExportFileName = autoBackupHandleName || lastExportFileName;
+                lastAutoBackupDate = getTodayString();
+                saveData();
+                updateAutoBackupStatus();
+                if (reason === "manual") {
+                    showToast("已自动备份");
+                }
+                return true;
+            } catch (error) {
+                console.error("auto backup failed:", error);
+                return false;
+            }
+        }
+
+        async function attemptAutoRestore() {
+            if (!autoRestoreEnabled) return;
+            let handle = null;
+            try {
+                handle = await loadAutoBackupHandle();
+            } catch (error) {
+                console.error("loadAutoBackupHandle failed:", error);
+            }
+            if (!handle) return;
+            const hasPermission = await ensureHandlePermission(handle, "read");
+            if (!hasPermission) return;
+            try {
+                const file = await handle.getFile();
+                const text = await file.text();
+                if (!text) return;
+                const parsed = JSON.parse(text);
+                applyImportedData(parsed, handle.name || file.name || "auto-backup.json", { closeStorage: false, silent: false });
+            } catch (error) {
+                console.error("auto restore failed:", error);
+            }
+        }
+
+        function scheduleAutoBackup() {
+            if (autoBackupTimer) {
+                clearInterval(autoBackupTimer);
+            }
+            autoBackupTimer = setInterval(() => {
+                if (!autoBackupEnabled) return;
+                if (lastAutoBackupDate !== getTodayString()) {
+                    void autoBackupToHandle("daily");
+                }
+            }, 60 * 60 * 1000);
+
+            document.addEventListener("visibilitychange", () => {
+                if (document.visibilityState === "hidden") {
+                    void autoBackupToHandle("exit");
+                }
+            });
+
+            window.addEventListener("beforeunload", () => {
+                void autoBackupToHandle("exit");
+            });
         }
 
         function buildAppSnapshot() {
@@ -1316,48 +1609,7 @@
             reader.onload = function() {
                 try {
                     const parsed = JSON.parse(String(reader.result || '{}'));
-                    workData = parsed.workData || { records: {} };
-                    intakeData = parsed.intakeData || { coffee: { total: 0, totalCaffeine: 0, records: {} }, water: { total: 0, records: {} } };
-                    toiletData = parsed.toiletData || { records: {} };
-                    exerciseData = parsed.exerciseData || { records: {} };
-                    profileData = parsed.profileData || { name: '姓名', id: '123', avatar: '', backgroundImage: '' };
-                    ballTypeOptions = parsed.ballTypeOptions || ['篮球', '足球', '羽毛球', '网球', '乒乓球', '排球'];
-                    customExerciseTypes = parsed.customExerciseTypes || [];
-                    taskData = parsed.taskData || {};
-                    coffeeData = parsed.coffeeData || getDefaultCoffeeData();
-                    const importedActiveWorkState = parsed.activeWorkState || getDefaultActiveWorkState();
-                    workState = ['idle', 'working', 'resting'].includes(importedActiveWorkState.workState) ? importedActiveWorkState.workState : 'idle';
-                    currentWorkSession = normalizeSession(importedActiveWorkState.currentWorkSession);
-                    currentRestSession = normalizeSession(importedActiveWorkState.currentRestSession);
-                    if (workState === 'working' && !currentWorkSession) workState = 'idle';
-                    if (workState === 'resting' && !currentRestSession) workState = 'idle';
-                    if (workState === 'idle') {
-                        currentWorkSession = null;
-                        currentRestSession = null;
-                    }
-                    localStorage.setItem('todoData', JSON.stringify(parsed.todoData || {}));
-                    localStorage.setItem('moodData', JSON.stringify(parsed.moodData || {}));
-                    lastExportFileName = file.name;
-                    saveData();
-                    initData();
-                    renderProfile();
-                    applyThemeBackground();
-                    updateBallTypeOptions();
-                    renderExerciseTypeButtons();
-                    updateWorkDisplay();
-                    updateTodayWorkSessions();
-                    updateTodayRestSessions();
-                    updateTodayWorkStats();
-                    updateIntakeDisplay();
-                    updateToiletDisplay();
-                    updateExerciseDisplay();
-                    renderTodoList();
-                    renderMoodTimeline();
-                    updateTodayStatus();
-                    updateDataStorageStatus();
-                    document.getElementById('nav-tasks').click();
-                    closeStorageModal();
-                    showToast('数据已读取');
+                    applyImportedData(parsed, file.name, { closeStorage: true, silent: false });
                 } catch (error) {
                     showToast('读取失败，请确认文件格式正确');
                 }

@@ -1,0 +1,16 @@
+{
+  "name": "graduate-self-management-site",
+  "version": "1.0.0",
+  "description": "这是一个可独立部署的单页面研究生自我管理系统。",
+  "main": "tailwind.config.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build:css": "tailwindcss -c tailwind.config.js -i tailwind.css -o style.css --minify"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "tailwindcss": "^3.4.13"
+  }
+}

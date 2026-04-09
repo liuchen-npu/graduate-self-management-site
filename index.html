@@ -4,102 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>硕士生工位打卡与时间管理系统</title>
-    <!-- Tailwind CSS v3 -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+    <link rel="stylesheet" href="style.css">
     <!-- Font Awesome -->
     <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
-    <!-- 统一的 Tailwind 配置 -->
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        primary: '#1a56db',
-                        secondary: '#4f46e5',
-                        accent: '#3b82f6',
-                        success: '#10b981',
-                        warning: '#f59e0b',
-                        danger: '#ef4444',
-                        light: '#f3f4f6',
-                        dark: '#1f2937'
-                    },
-                    fontFamily: {
-                        sans: ['Inter', 'system-ui', 'sans-serif'],
-                    },
-                    animation: {
-                        'bounce-slow': 'bounce 2s infinite',
-                        'pulse-slow': 'pulse 3s infinite',
-                    }
-                }
-            }
-        }
-    </script>
-    <style type="text/tailwindcss">
-        @layer utilities {
-            .glass-effect {
-                background: rgba(255, 255, 255, 0.25);
-                backdrop-filter: blur(10px);
-                -webkit-backdrop-filter: blur(10px);
-                border: 1px solid rgba(255, 255, 255, 0.18);
-            }
-            .btn-shadow {
-                box-shadow: 0 4px 0 0 theme('colors.primary.700');
-            }
-            .btn-shadow:active {
-                transform: translateY(4px);
-                box-shadow: 0 0 0 0 theme('colors.primary.700');
-            }
-            .achievement-popup {
-                animation: popup 0.5s ease-out, fadeOut 0.5s ease-in 3.5s forwards;
-            }
-            .emoji-burst {
-                animation: emojiBurst 2s ease-out forwards;
-                pointer-events: none;
-            }
-            .hero-default .hero-title,
-            .hero-default .hero-subtitle,
-            .hero-default .hero-mood-note {
-                color: #1f2937;
-                text-shadow: 0 2px 12px rgba(255, 255, 255, 0.75);
-            }
-            .hero-custom .hero-title,
-            .hero-custom .hero-subtitle,
-            .hero-custom .hero-mood-note {
-                color: #1f2937;
-                text-shadow: 0 2px 12px rgba(255, 255, 255, 0.75);
-            }
-            .hero-default .hero-text-panel {
-                background: rgba(255, 255, 255, 0.72);
-                backdrop-filter: blur(6px);
-                -webkit-backdrop-filter: blur(6px);
-                border: 1px solid rgba(255, 255, 255, 0.5);
-                box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
-            }
-            .hero-custom .hero-text-panel {
-                background: rgba(255, 255, 255, 0.72);
-                backdrop-filter: blur(6px);
-                -webkit-backdrop-filter: blur(6px);
-                border: 1px solid rgba(255, 255, 255, 0.5);
-                box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
-            }
-            @keyframes popup {
-                0% { transform: scale(0); opacity: 0; }
-                70% { transform: scale(1.1); opacity: 1; }
-                100% { transform: scale(1); opacity: 1; }
-            }
-            @keyframes fadeOut {
-                0% { transform: scale(1); opacity: 1; }
-                100% { transform: scale(0.9); opacity: 0; }
-            }
-            @keyframes emojiBurst {
-                0% { transform: translate(-50%, 0) scale(0.6); opacity: 0; }
-                20% { transform: translate(-50%, -14px) scale(1.05); opacity: 1; }
-                100% { transform: translate(-50%, -78px) scale(1.2); opacity: 0; }
-            }
-        }
-    </style>
 </head>
 <body id="app-body" class="bg-gray-100 font-sans min-h-screen">
     <div class="container mx-auto px-4 py-8 max-w-6xl">
@@ -854,6 +763,7 @@
         let autoBackupHandleName = '';
         let lastAutoBackupDate = '';
         let autoBackupTimer = null;
+        let chartJsPromise = null;
 
         // 咖啡品牌和品类数据结构
         // 格式: { brandName: { typeName: caffeineValue } }
@@ -3060,7 +2970,28 @@
             `;
         }
 
-        function updateStatisticsCharts(period) {
+
+        function ensureChartJs() {
+            if (window.Chart) return Promise.resolve();
+            if (chartJsPromise) return chartJsPromise;
+            chartJsPromise = new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js';
+                script.async = true;
+                script.onload = () => resolve();
+                script.onerror = () => reject(new Error('Chart.js load failed'));
+                document.head.appendChild(script);
+            });
+            return chartJsPromise;
+        }
+
+        async function updateStatisticsCharts(period) {
+            try {
+                await ensureChartJs();
+            } catch (error) {
+                showToast('图表加载失败，请稍后重试');
+                return;
+            }
             const { startDate, endDate, labels } = getDateRange(period);
             updateWorkChart(labels, prepareWorkData(startDate, endDate, labels));
             updateRestChart(labels, prepareRestData(startDate, endDate, labels));

@@ -45,3 +45,12 @@
 - 开启后会在页面隐藏/关闭时自动写入，并且每天至少自动备份一次。
 - 启动时可自动读取该文件，免去手动导入。
 - 需要支持 File System Access API 的浏览器（Chromium 系列浏览器体验最佳）。
+
+## 样式构建
+
+页面使用预编译的 Tailwind CSS。若修改了 `index.html` 中的类名或 `tailwind.css`，请在本地执行：
+
+```bash
+npm install
+npm run build:css
+```
